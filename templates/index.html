@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Commit Wrapped</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<div class="page">
+
+  <!-- ── Landing (logged out) ───────────────────────────────────────── -->
+  <section id="landing" {% if user %}class="hidden"{% endif %}>
+    <div class="logo-mark">⬡</div>
+    <h1 class="landing-title">Commit Wrapped</h1>
+    <p class="landing-sub">Your GitHub commit history, beautifully analysed.</p>
+    {% if error %}
+      <div class="error-banner">Sign-in failed — please try again.</div>
+    {% endif %}
+    <a href="/auth/login" class="btn btn-github">
+      <svg height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      Sign in with GitHub
+    </a>
+    <p style="color:var(--muted);font-size:0.8rem;">Only reads public data &nbsp;·&nbsp; No data stored</p>
+  </section>
+
+  <!-- ── Generate (logged in, pre-analysis) ─────────────────────────── -->
+  <section id="generate" {% if not user %}class="hidden"{% endif %}>
+    {% if user %}
+    <div class="user-card">
+      <img src="{{ user.avatar_url }}" alt="{{ user.login }}" />
+      <div>
+        <div class="name">{{ user.name }}</div>
+        <div class="login">@{{ user.login }}</div>
+      </div>
+    </div>
+    {% endif %}
+    <h2 class="generate-title">Ready for your Wrapped?</h2>
+    <div class="days-row">
+      <span>Analyse the last</span>
+      <select id="days-select">
+        <option value="30" selected>30 days</option>
+        <option value="60">60 days</option>
+        <option value="90">90 days</option>
+        <option value="180">180 days</option>
+      </select>
+      <span>of commits</span>
+    </div>
+    <button class="btn btn-primary" onclick="generateWrapped()">
+      Generate My Wrapped ✦
+    </button>
+    <a href="/auth/logout" class="btn btn-ghost">Sign out</a>
+  </section>
+
+  <!-- ── Loading ────────────────────────────────────────────────────── -->
+  <section id="loading" class="hidden">
+    <div class="spinner"></div>
+    <p class="loading-text" id="loading-text">Fetching your commits…</p>
+    <p style="color:var(--muted);font-size:0.8rem;margin-top:0.5rem;">
+      This can take 10–30 seconds depending on repo count.
+    </p>
+  </section>
+
+  <!-- ── Results ────────────────────────────────────────────────────── -->
+  <section id="results" class="hidden"></section>
+
+</div>
+
+<script>
+const LANG_COLORS = {
+  Python:'#f7c948', JavaScript:'#f0db4f', TypeScript:'#3178c6',
+  Rust:'#ef4900', Go:'#00acd7', Ruby:'#cc342d', Java:'#ed8b00',
+  'C++':'#00589c', 'C#':'#9b4f96', C:'#a8b9cc', Shell:'#4eaa25',
+  HTML:'#e44d26', CSS:'#264de4', Swift:'#f05138', Kotlin:'#7f52ff',
+  PHP:'#8892be', Scala:'#dc322f', Dart:'#00b4ab', Vue:'#42b883',
+};
+
+const WEEKDAY_LABELS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+
+function show(id)   { document.getElementById(id).classList.remove('hidden'); }
+function hide(id)   { document.getElementById(id).classList.add('hidden'); }
+
+async function generateWrapped() {
+  const days = document.getElementById('days-select').value;
+  hide('generate');
+  show('loading');
+
+  const messages = [
+    'Fetching your commits…',
+    'Scanning repositories…',
+    'Counting streaks…',
+    'Analysing commit messages…',
+    'Tallying languages…',
+    'Calculating your vibe…',
+  ];
+  let i = 0;
+  const ticker = setInterval(() => {
+    document.getElementById('loading-text').textContent = messages[i % messages.length];
+    i++;
+  }, 3000);
+
+  try {
+    const resp = await fetch(`/api/analyse?days=${days}`);
+    clearInterval(ticker);
+
+    if (!resp.ok) {
+      const err = await resp.json();
+      hide('loading');
+      show('generate');
+      alert(`Error: ${err.detail}`);
+      return;
+    }
+
+    const data = await resp.json();
+    hide('loading');
+    renderResults(data);
+    show('results');
+    // Trigger bar animations after DOM paint
+    requestAnimationFrame(() => requestAnimationFrame(animateBars));
+  } catch (e) {
+    clearInterval(ticker);
+    hide('loading');
+    show('generate');
+    alert('Something went wrong. Please try again.');
+  }
+}
+
+function animateBars() {
+  document.querySelectorAll('[data-width]').forEach(el => {
+    el.style.width = el.dataset.width;
+  });
+}
+
+function bar(pct, color, maxPct = 100) {
+  const w = Math.max(2, (pct / maxPct) * 100);
+  return `<div class="bar-track"><div class="bar-fill" style="background:${color}" data-width="${w}%"></div></div>`;
+}
+
+function formatBytes(b) {
+  if (b > 1_000_000) return `${(b/1_000_000).toFixed(1)}M`;
+  if (b > 1_000)     return `${(b/1_000).toFixed(0)}K`;
+  return `${b}`;
+}
+
+function renderResults(d) {
+  const a = d.activity, l = d.languages, m = d.messages, v = d.vibe, meta = d.meta;
+
+  // Hour label
+  const h = a.busiest_hour;
+  const hourStr = h !== null ? `${String(h).padStart(2,'0')}:00` : 'N/A';
+
+  // ── Header ────────────────────────────────────────────────────────
+  const header = `
+    <div class="results-header">
+      <img src="https://github.com/${meta.username}.png" alt="${meta.username}" />
+      <div>
+        <div class="user-name">@${meta.username}</div>
+        <div class="meta">Last ${meta.days} days &nbsp;·&nbsp; ${meta.total_commits} commits across ${meta.total_repos} repos</div>
+      </div>
+    </div>`;
+
+  // ── Activity stats ────────────────────────────────────────────────
+  const activityCard = `
+    <div class="card" style="animation-delay:0.05s">
+      <div class="card-title">Activity</div>
+      <div class="stat-grid">
+        <div class="stat-chip">
+          <div class="value" style="color:var(--yellow)">${a.total_commits}</div>
+          <div class="label">total commits</div>
+        </div>
+        <div class="stat-chip">
+          <div class="value" style="color:var(--green)">${a.current_streak}d</div>
+          <div class="label">current streak</div>
+        </div>
+        <div class="stat-chip">
+          <div class="value" style="color:var(--blue)">${a.longest_streak}d</div>
+          <div class="label">longest streak</div>
+        </div>
+        <div class="stat-chip">
+          <div class="value" style="color:var(--purple);font-size:1rem">${a.busiest_day}</div>
+          <div class="label">busiest day</div>
+        </div>
+        <div class="stat-chip">
+          <div class="value" style="color:var(--orange);font-size:1rem">${hourStr}</div>
+          <div class="label">peak hour</div>
+        </div>
+        <div class="stat-chip">
+          <div class="value" style="color:var(--red);font-size:0.85rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${a.most_active_repo}</div>
+          <div class="label">top repo</div>
+        </div>
+      </div>
+    </div>`;
+
+  // ── Top repos ─────────────────────────────────────────────────────
+  const maxRepoCount = a.top_repos[0]?.count || 1;
+  const repoRows = a.top_repos.map(r => `
+    <div class="bar-row">
+      <span class="bar-label">${escHtml(r.name)}</span>
+      ${bar(r.count, 'var(--blue)', maxRepoCount)}
+      <span class="bar-pct">${r.count}</span>
+    </div>`).join('');
+
+  const reposCard = `
+    <div class="card" style="animation-delay:0.1s">
+      <div class="card-title">Top Repos</div>
+      <div class="bar-list">${repoRows}</div>
+    </div>`;
+
+  // ── Languages ─────────────────────────────────────────────────────
+  let langsCard = '';
+  if (l.length) {
+    const langRows = l.map(lg => {
+      const color = LANG_COLORS[lg.name] || 'var(--muted)';
+      return `
+        <div class="bar-row">
+          <span class="bar-label">${escHtml(lg.name)}</span>
+          ${bar(lg.pct, color)}
+          <span class="bar-pct">${lg.pct}%</span>
+        </div>`;
+    }).join('');
+    langsCard = `
+      <div class="card" style="animation-delay:0.15s;grid-column:span 2">
+        <div class="card-title">Languages — by bytes written</div>
+        <div class="bar-list">${langRows}</div>
+      </div>`;
+  }
+
+  // ── Commit messages ───────────────────────────────────────────────
+  let msgsSection = '';
+  if (m && m.total > 0) {
+    const maxVerb = m.top_verbs[0]?.count || 1;
+    const verbRows = m.top_verbs.map(w => `
+      <div class="bar-row narrow">
+        <span class="bar-label">${escHtml(w.word)}</span>
+        ${bar(w.count, 'var(--green)', maxVerb)}
+        <span class="bar-pct">${w.count}</span>
+      </div>`).join('');
+
+    const maxWord = m.top_words[0]?.count || 1;
+    const wordRows = m.top_words.map(w => `
+      <div class="bar-row narrow">
+        <span class="bar-label">${escHtml(w.word)}</span>
+        ${bar(w.count, 'var(--blue)', maxWord)}
+        <span class="bar-pct">${w.count}</span>
+      </div>`).join('');
+
+    const fixTotal = (m.fix_count + m.feat_count) || 1;
+    const fixPct  = Math.round(m.fix_count  / fixTotal * 100);
+    const featPct = Math.round(m.feat_count / fixTotal * 100);
+
+    msgsSection = `
+      <div class="results-grid">
+        <div class="card" style="animation-delay:0.2s">
+          <div class="card-title">Top Verbs</div>
+          <div class="bar-list">${verbRows}</div>
+        </div>
+        <div class="card" style="animation-delay:0.25s">
+          <div class="card-title">Top Words</div>
+          <div class="bar-list">${wordRows}</div>
+        </div>
+      </div>
+      <div class="card" style="animation-delay:0.3s">
+        <div class="card-title">fix: vs feat: ratio</div>
+        <div class="ratio-row">
+          <span class="ratio-label" style="color:var(--red)">fix</span>
+          <div class="ratio-track"><div class="ratio-fill" style="background:var(--red)" data-width="${fixPct}%"></div></div>
+          <span class="ratio-count">${m.fix_count}</span>
+        </div>
+        <div class="ratio-row">
+          <span class="ratio-label" style="color:var(--green)">feat</span>
+          <div class="ratio-track"><div class="ratio-fill" style="background:var(--green)" data-width="${featPct}%"></div></div>
+          <span class="ratio-count">${m.feat_count}</span>
+        </div>
+      </div>
+      <div class="card" style="animation-delay:0.35s">
+        <div class="card-title">Commit Messages</div>
+        <div class="msg-pair">
+          <div class="msg-item">
+            <span class="msg-tag">Shortest</span>
+            <div class="msg-text">${escHtml(m.shortest)}</div>
+          </div>
+          <div class="msg-item">
+            <span class="msg-tag">Longest</span>
+            <div class="msg-text">${escHtml(m.longest)}</div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  // ── Vibe ──────────────────────────────────────────────────────────
+  const vibeCard = `
+    <div class="vibe-card" style="animation-delay:0.4s">
+      <div class="vibe-title">${escHtml(v.title)}</div>
+      <p class="vibe-blurb">${escHtml(v.blurb)}</p>
+    </div>`;
+
+  // ── Footer ─────────────────────────────────────────────────────────
+  const footer = `
+    <div class="footer">
+      Commit Wrapped &nbsp;·&nbsp; Built with the GitHub API
+      &nbsp;·&nbsp; <a href="/auth/logout">Sign out</a>
+    </div>`;
+
+  document.getElementById('results').innerHTML = `
+    ${header}
+    <div class="results-grid">
+      ${activityCard}
+      ${reposCard}
+      ${langsCard}
+    </div>
+    ${msgsSection}
+    ${vibeCard}
+    ${footer}
+  `;
+}
+
+function escHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+</script>
+</body>
+</html>
